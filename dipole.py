@@ -11,6 +11,8 @@ pi=numpy.pi
 mu0=4*pi*1e-7
 eps0=1./(mu0*c**2)
 
+from multiprocessing import Pool
+
 
 def Hertz_dipole (r, p, R, phi, f, t=0, epsr=1.):
   """
@@ -172,12 +174,47 @@ def Hertz_dipole_nf (r, p, R, phi, f, t=0, epsr=1.):
     B = numpy.vstack((numpy.sum(Bx,axis=0),numpy.sum(By,axis=0),numpy.sum(Bz,axis=0)))
     return E,B
 
+
+def compute(data_point):
+  args = data_point
+  E,B=Hertz_dipole(*args)
+  S=real(E)**2#0.5*numpy.cross(E.T,conjugate(B.T))
+  return sum(S)
+
+def compute_worker(data_point):
+  print(data_point)
+  i, j, args = data_point
+  E,B=Hertz_dipole(*args)
+  S=real(E)**2#0.5*numpy.cross(E.T,conjugate(B.T))
+  return i, j, sum(S)
+
+def compute_parallel(k, p, nx, nz, x, y, z, R, phases_dip, freq, t):
+  P=numpy.zeros((nx,nz))
+
+  data_set = []
+
+  for i in range(nx):
+      for j in range(nz):
+        r=array([x[i],y,z[j]])
+        args = (r, p, R, phases_dip, f, t[k])
+        data_point = [i, j, args]
+        data_set.append(data_point)
+  p = Pool(5)
+  results = p.map(compute_worker, data_set)
+
+  for point in results:
+    i, j = point[0], point[1] 
+    P[i,j] = point[2]
+  return P
+  
+
+
 if __name__ == "__main__":
   from pylab import *
   #observation points
-  nx=401
+  nx=40#401
   xmax=2
-  nz=201
+  nz=20#201
   zmax=1
   x=numpy.linspace(-xmax,xmax,nx)
   y=0
@@ -195,7 +232,7 @@ if __name__ == "__main__":
   #dipole phases
   phases_dip=0
 
-  nt=100
+  #nt=20
   t0=1/freq/10
   t1=5/freq
   nt=int(t1/t0)
@@ -203,14 +240,14 @@ if __name__ == "__main__":
 
   print("Computing the radiation...")
   fig = figure(num=1,figsize=(10,6),dpi=300)
+
   for k in range(nt):
+    #parralel_P = compute_parallel(k, p, nx, nz, x, y, z, R, phases_dip, freq, t)
     P=numpy.zeros((nx,nz))
     for i in range(nx):
       for j in range(nz):
         r=array([x[i],y,z[j]])
-        E,B=Hertz_dipole (r, p, R, phases_dip, freq, t[k], epsr=1.)
-        S=real(E)**2#0.5*numpy.cross(E.T,conjugate(B.T))
-        P[i,j]=sum(S)
+        P[i,j]=compute((r, p, R, phases_dip, freq, t[k]))
     print('%2.1f/100'%((k+1)/nt*100))
     #Radiation diagram
     pcolor(x,z,P[:,:].T,cmap='hot')
@@ -225,3 +262,4 @@ if __name__ == "__main__":
     print 'Saving frame', fname
     fig.savefig(fname+'.png',bbox='tight')
     clf()
+    assert parralel_P == P
