@@ -6,12 +6,14 @@ This file gives the dipole radiation (E and B field) in the far field, the full 
 """
 from __future__ import division
 import numpy
+import timeit
+
 c=299792458.
 pi=numpy.pi
 mu0=4*pi*1e-7
 eps0=1./(mu0*c**2)
 import multiprocessing
-
+import time
 
 def Hertz_dipole (r, p, R, phi, f, t=0, epsr=1.):
   """
@@ -181,11 +183,17 @@ def compute(data_point):
   return sum(S)
 
 def compute_worker(data_point):
+  #s = time.time()
+
   i, j, args = data_point
   #print(i,j)
   E,B=Hertz_dipole(*args)
   S=real(E)**2#0.5*numpy.cross(E.T,conjugate(B.T))
+
+  #print('worker done in ',time.time()-s)
   return i, j, sum(S)
+
+
 
 def compute_parallel(p, nx, nz, x, y, z, R, phases_dip, freq, t_k):
   P=numpy.zeros((nx,nz))
@@ -198,7 +206,12 @@ def compute_parallel(p, nx, nz, x, y, z, R, phases_dip, freq, t_k):
         data_point = [i, j, args]
         data_set.append(data_point)
   p = multiprocessing.Pool(multiprocessing.cpu_count()-1)
-  results = p.map(compute_worker, data_set)
+  s = time.time()
+  chunksize = max(int(round((nx*nz)/(multiprocessing.cpu_count()-1))) - 100, 1)
+  results = p.map(compute_worker, data_set, chunksize=chunksize)
+  p.close()
+  p.join()
+  p.terminate()
 
   for point in results:
     i, j = point[0], point[1] 
@@ -208,6 +221,8 @@ def compute_parallel(p, nx, nz, x, y, z, R, phases_dip, freq, t_k):
 
 
 if __name__ == "__main__":
+  start = timeit.default_timer()
+
   from pylab import *
   #observation points
   nx=401
@@ -230,7 +245,7 @@ if __name__ == "__main__":
   #dipole phases
   phases_dip=0
 
-  #nt=20
+  nt=100
   t0=1/freq/10
   t1=5/freq
   nt=int(t1/t0)
@@ -240,7 +255,28 @@ if __name__ == "__main__":
   fig = figure(num=1,figsize=(10,6),dpi=300)
 
   for k in range(nt):
-    P = compute_parallel(p, nx, nz, x, y, z, R, phases_dip, freq, t[k])
+    #Compute in parallel and time execution
+    s = time.time()
+    P_parallel = compute_parallel(p, nx, nz, x, y, z, R, phases_dip, freq, t[k])
+    print('Parallel computation done in', time.time()-s)
+    P = P_parallel
+    
+    """
+      Uncomment below to compare parralelized vs iteratvie
+    """
+    # s = time.time()
+    # P=numpy.zeros((nx,nz))
+    # for i in range(nx):
+    #   for j in range(nz):
+    #     r=array([x[i],y,z[j]])
+    #     E,B=Hertz_dipole (r, p, R, phases_dip, freq, t[k], epsr=1.)
+    #     S=real(E)**2#0.5*numpy.cross(E.T,conjugate(B.T))
+    #     P[i,j]=sum(S)
+    # print('Iteratvie computation done in', time.time()-s)
+    
+    # #Assertion ensures the parralel computed P matrix is the same as iterative P matrix. 
+    # assert (P[~numpy.isnan(P)] - P_parallel[~numpy.isnan(P_parallel)] < 1e-5).all()
+
     print('%2.1f/100'%((k+1)/nt*100))
     #Radiation diagram
     pcolor(x,z,P[:,:].T,cmap='hot')
@@ -255,5 +291,10 @@ if __name__ == "__main__":
     print 'Saving frame', fname
     fig.savefig(fname+'.png',bbox='tight')
     clf()
-    #assert parralel_P == P
-    break
+
+  stop = timeit.default_timer()
+  total_time = stop - start
+  mins, secs = divmod(total_time, 60)
+  hours, mins = divmod(mins, 60)
+
+  sys.stdout.write("Total running time: %d:%d:%d.\n"  % (hours, mins, secs))
