@@ -5,15 +5,21 @@ This file gives the dipole radiation (E and B field) in the far field, the full 
 @author: manu
 """
 from __future__ import division
+import argparse
 import numpy
 import timeit
+import os
+from os import path as op 
+import multiprocessing
+import time
+from pylab import *
+import subprocess, os, signal, sys
 
 c=299792458.
 pi=numpy.pi
 mu0=4*pi*1e-7
 eps0=1./(mu0*c**2)
-import multiprocessing
-import time
+
 
 def Hertz_dipole (r, p, R, phi, f, t=0, epsr=1.):
   """
@@ -175,25 +181,11 @@ def Hertz_dipole_nf (r, p, R, phi, f, t=0, epsr=1.):
     B = numpy.vstack((numpy.sum(Bx,axis=0),numpy.sum(By,axis=0),numpy.sum(Bz,axis=0)))
     return E,B
 
-
-def compute(data_point):
-  args = data_point
-  E,B=Hertz_dipole(*args)
-  S=real(E)**2#0.5*numpy.cross(E.T,conjugate(B.T))
-  return sum(S)
-
-def compute_worker(data_point):
-  #s = time.time()
-
+def parallel_worker(data_point):
   i, j, args = data_point
-  #print(i,j)
   E,B=Hertz_dipole(*args)
   S=real(E)**2#0.5*numpy.cross(E.T,conjugate(B.T))
-
-  #print('worker done in ',time.time()-s)
   return i, j, sum(S)
-
-
 
 def compute_parallel(p, nx, nz, x, y, z, R, phases_dip, freq, t_k):
   P=numpy.zeros((nx,nz))
@@ -205,25 +197,48 @@ def compute_parallel(p, nx, nz, x, y, z, R, phases_dip, freq, t_k):
         args = (r, p, R, phases_dip, freq, t_k)
         data_point = [i, j, args]
         data_set.append(data_point)
+
   p = multiprocessing.Pool(multiprocessing.cpu_count()-1)
   s = time.time()
   chunksize = max(int(round((nx*nz)/(multiprocessing.cpu_count()-1))) - 100, 1)
-  results = p.map(compute_worker, data_set, chunksize=chunksize)
+  results = p.map(parallel_worker, data_set, chunksize=chunksize)
   p.close()
   p.join()
   p.terminate()
-
+  
   for point in results:
     i, j = point[0], point[1] 
     P[i,j] = point[2]
   return P
   
-
+def compute_iterative(p, nx, nz, x, y, z, R, phases_dip, freq, t_k):
+  P=numpy.zeros((nx,nz))
+  for i in range(nx):
+    for j in range(nz):
+      r=array([x[i],y,z[j]])
+      E,B=Hertz_dipole (r, p, R, phases_dip, freq, t_k)
+      S=real(E)**2#0.5*numpy.cross(E.T,conjugate(B.T))
+      P[i,j]=sum(S)
+  return P
 
 if __name__ == "__main__":
-  start = timeit.default_timer()
+  parser = argparse.ArgumentParser()
+  parser.add_argument("-o", "--output", help="directory to output images to, defaults to \"{script_path}/out\"")
+  parser.add_argument("-np", "--no-parallel", action='store_true', help="If set multiprocessing won't be used.")
+  args = parser.parse_args()
+  out_dir = args.output 
+  if not out_dir:
+    out_dir= op.join(op.dirname(__file__), 'out') #Use default out dir path
+  
+  if not op.exists(out_dir):
+    os.mkdir(out_dir) #Make out dir if not exists
 
-  from pylab import *
+  if args.no_parallel:
+    print('Running in iterative mode')
+  else:
+    print('Running in multiprocessing mode')
+  start = timeit.default_timer()
+  
   #observation points
   nx=401
   xmax=2
@@ -257,24 +272,14 @@ if __name__ == "__main__":
   for k in range(nt):
     #Compute in parallel and time execution
     s = time.time()
-    P_parallel = compute_parallel(p, nx, nz, x, y, z, R, phases_dip, freq, t[k])
-    print('Parallel computation done in', time.time()-s)
-    P = P_parallel
+    P = None
+    if args.no_parallel:
+      P = compute_iterative(p, nx, nz, x, y, z, R, phases_dip, freq, t[k])
+    else:
+      P = compute_parallel(p, nx, nz, x, y, z, R, phases_dip, freq, t[k])
+    print 'Computation done in', time.time()-s
     
-    """
-      Uncomment below to compare parralelized vs iteratvie
-    """
-    # s = time.time()
-    # P=numpy.zeros((nx,nz))
-    # for i in range(nx):
-    #   for j in range(nz):
-    #     r=array([x[i],y,z[j]])
-    #     E,B=Hertz_dipole (r, p, R, phases_dip, freq, t[k], epsr=1.)
-    #     S=real(E)**2#0.5*numpy.cross(E.T,conjugate(B.T))
-    #     P[i,j]=sum(S)
-    # print('Iteratvie computation done in', time.time()-s)
-    
-    # #Assertion ensures the parralel computed P matrix is the same as iterative P matrix. 
+    # #Assertion ensures the parallel computed P matrix is the same as iterative P matrix. 
     # assert (P[~numpy.isnan(P)] - P_parallel[~numpy.isnan(P_parallel)] < 1e-5).all()
 
     print('%2.1f/100'%((k+1)/nt*100))
@@ -289,7 +294,8 @@ if __name__ == "__main__":
     ylabel(r'$z/$m')
     title(r'$t=%2.2f$ ns'%(t[k]/1e-9))
     print 'Saving frame', fname
-    fig.savefig(fname+'.png',bbox='tight')
+    fpath = op.join(out_dir,fname+'.png')
+    fig.savefig(fpath,bbox='tight')
     clf()
 
   stop = timeit.default_timer()
