@@ -115,8 +115,8 @@ if __name__ == "__main__":
   #assert (P[~isnan(P)] - P1[~isnan(P1)] < 1e-5).all() #Debug assertion to ensure parallel and iterative matrices are the same.
 
   print("Printing the radiation patterns")
-  rcParams['text.usetex']=False
-  rcParams['text.latex.unicode']=False
+  rcParams['text.usetex']=True
+  rcParams['text.latex.unicode']=True
   rcParams['legend.fontsize'] = 'medium'
   rc('font',**{'family':'serif','serif':['Computer Modern Roman']})
 
